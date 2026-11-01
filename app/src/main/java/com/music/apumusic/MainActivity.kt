@@ -419,3 +419,401 @@ fun ExploreScreen(
         OutlinedTextField(
             value = query,
             onValueChange = {
+                query = it
+                if (it.length >= 2) onSearch(it)
+            },
+            placeholder = { Text("Search songs, artists, or albums...") },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
+            shape = RoundedCornerShape(24.dp),
+            colors = OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = Color(0xFF1E1E26),
+                unfocusedContainerColor = Color(0xFF1A1A22),
+                focusedTextColor = Color.White,
+                unfocusedTextColor = Color.White
+            ),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (searchResults.isNotEmpty()) {
+            Text(
+                text = "Search Results",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White
+            )
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                items(searchResults) { song ->
+                    SongRow(song = song, onClick = { onSongSelected(song) })
+                }
+            }
+        } else {
+            Text(
+                text = "Trending Vibes",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = Color.White,
+                modifier = Modifier.padding(vertical = 8.dp)
+            )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                items(listOf("Acoustic Glass", "Hyper Focus", "Midnight Lofi", "Indie Wave")) { vibe ->
+                    Card(
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color(0xFF242432)),
+                        modifier = Modifier
+                            .size(width = 160.dp, height = 100.dp)
+                            .clickable { onSearch(vibe) }
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.BottomStart) {
+                            Text(text = vibe, fontWeight = FontWeight.Bold, color = Color.White)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SmartMixesScreen(
+    allSongs: List<Song>,
+    smartMixGen: SmartMixGenerator,
+    onSongSelected: (Song) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "Smart Radios",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+        Text(
+            text = "Algorithmic mixes generated from your listening history",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.6f)
+        )
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            items(MixVibe.values()) { vibe ->
+                Card(
+                    shape = RoundedCornerShape(18.dp),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E2A)),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            val mix = smartMixGen.generateMix(allSongs, vibe)
+                            mix.generatedTracks.firstOrNull()?.let { onSongSelected(it) }
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(48.dp)
+                                .clip(CircleShape)
+                                .background(Brush.linearGradient(listOf(Color(0xFF64D2FF), Color(0xFFBF5AF2)))),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Default.GraphicEq, contentDescription = null, tint = Color.White)
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Column {
+                            Text(text = vibe.title, fontWeight = FontWeight.Bold, color = Color.White, style = MaterialTheme.typography.titleMedium)
+                            Text(text = vibe.subtitle, color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LibraryScreen(
+    songs: List<Song>,
+    onSongSelected: (Song) -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp)
+    ) {
+        Text(
+            text = "Local Library",
+            style = MaterialTheme.typography.headlineMedium,
+            fontWeight = FontWeight.Bold,
+            color = Color.White
+        )
+        Text(
+            text = "${songs.size} tracks found on device",
+            style = MaterialTheme.typography.bodySmall,
+            color = Color.White.copy(alpha = 0.6f)
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        LazyColumn(modifier = Modifier.fillMaxSize()) {
+            items(songs) { song ->
+                SongRow(song = song, onClick = { onSongSelected(song) })
+            }
+        }
+    }
+}
+
+@Composable
+fun SongRow(song: Song, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Card(
+            shape = RoundedCornerShape(8.dp),
+            modifier = Modifier.size(52.dp)
+        ) {
+            AsyncImage(
+                model = song.albumArtUri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = song.title, fontWeight = FontWeight.SemiBold, color = Color.White, maxLines = 1)
+            Text(text = song.artist, color = Color.White.copy(alpha = 0.6f), style = MaterialTheme.typography.bodySmall, maxLines = 1)
+        }
+        IconButton(onClick = onClick) {
+            Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color(0xFF64D2FF))
+        }
+    }
+}
+
+@Composable
+fun MiniPlayer(
+    song: Song,
+    isPlaying: Boolean,
+    onPlayPause: () -> Unit,
+    onClick: () -> Unit
+) {
+    Card(
+        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF22222E)),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Card(
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.size(44.dp)
+            ) {
+                AsyncImage(
+                    model = song.albumArtUri,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            Spacer(modifier = Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = song.title, fontWeight = FontWeight.Bold, color = Color.White, maxLines = 1)
+                Text(text = song.artist, color = Color.White.copy(alpha = 0.7f), style = MaterialTheme.typography.bodySmall, maxLines = 1)
+            }
+            IconButton(onClick = onPlayPause) {
+                Icon(
+                    imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                    contentDescription = null,
+                    tint = Color.White
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun NowPlayingSheetView(
+    song: Song?,
+    isPlaying: Boolean,
+    currentPositionMs: Long,
+    durationMs: Long,
+    syncedLyrics: List<LrcLine>,
+    onPlayPause: () -> Unit,
+    onNext: () -> Unit,
+    onPrevious: () -> Unit,
+    onSeekTo: (Long) -> Unit,
+    onClose: () -> Unit
+) {
+    if (song == null) return
+
+    var showLyrics by remember { mutableStateOf(false) }
+    var showStatsForNerds by remember { mutableStateOf(false) }
+    val listState = rememberLazyListState()
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(Color(0xFF1E1E2E).copy(alpha = 0.98f), Color(0xFF0F0F14))
+                )
+            )
+            .padding(24.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxSize(),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onClose) {
+                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Collapse", tint = Color.White)
+                }
+                Text(
+                    text = "Playing from APU Music",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontWeight = FontWeight.Medium
+                )
+                IconButton(onClick = { showStatsForNerds = !showStatsForNerds }) {
+                    Icon(Icons.Default.Info, contentDescription = "Stats for Nerds", tint = Color.White.copy(alpha = 0.7f))
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                if (showLyrics && syncedLyrics.isNotEmpty()) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        items(syncedLyrics) { line ->
+                            Text(
+                                text = line.text,
+                                style = MaterialTheme.typography.titleLarge,
+                                color = Color.White,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier
+                                    .padding(vertical = 12.dp)
+                                    .clickable { onSeekTo(line.timestampMs) }
+                            )
+                        }
+                    }
+                } else {
+                    Card(
+                        shape = RoundedCornerShape(24.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 16.dp),
+                        modifier = Modifier
+                            .size(300.dp)
+                            .clip(RoundedCornerShape(24.dp))
+                    ) {
+                        AsyncImage(
+                            model = song.albumArtUri,
+                            contentDescription = song.title,
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = song.title,
+                        style = MaterialTheme.typography.headlineSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White,
+                        maxLines = 1
+                    )
+                    Text(
+                        text = song.artist,
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Color.White.copy(alpha = 0.7f),
+                        maxLines = 1
+                    )
+                }
+                IconButton(onClick = { showLyrics = !showLyrics }) {
+                    Icon(
+                        imageVector = Icons.Default.ChatBubble,
+                        contentDescription = "Toggle Lyrics",
+                        tint = if (showLyrics) Color(0xFF64D2FF) else Color.White.copy(alpha = 0.6f)
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Slider(
+                value = if (durationMs > 0) currentPositionMs.toFloat() / durationMs.toFloat() else 0f,
+                onValueChange = { factor -> onSeekTo((factor * durationMs).toLong()) },
+                colors = SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = Color(0xFF64D2FF),
+                    inactiveTrackColor = Color.White.copy(alpha = 0.2f)
+                ),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = onPrevious, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.SkipPrevious, contentDescription = "Previous", tint = Color.White, modifier = Modifier.size(36.dp))
+                }
+                FilledIconButton(
+                    onClick = onPlayPause,
+                    shape = CircleShape,
+                    colors = IconButtonDefaults.filledIconButtonColors(containerColor = Color.White),
+                    modifier = Modifier.size(64.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = Color.Black,
+                        modifier = Modifier.size(36.dp)
+                    )
+                }
+                IconButton(onClick = onNext, modifier = Modifier.size(48.dp)) {
+                    Icon(Icons.Default.SkipNext, contentDescription = "Next", tint = Color.White, modifier = Modifier.size(36.dp))
+                }
+            }
+        }
+    }
+}
