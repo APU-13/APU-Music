@@ -23,6 +23,11 @@ jobs:
         with:
           gradle-version: '8.7'
 
+      - name: Remove Duplicate Icon Files
+        run: |
+          find app/src/main/res -name "*.png" -path "*/mipmap*/*" -delete
+          rm -f app/src/main/res/drawable/ic_launcher_foreground.webp
+
       - name: Build Debug APK
         run: gradle assembleDebug --stacktrace
 
