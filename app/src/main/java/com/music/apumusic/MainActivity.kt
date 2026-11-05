@@ -70,7 +70,7 @@ data class SmartMix(
     val generatedTracks: List<Song>
 )
 
-// ==================== SELF-CONTAINED ENGINES ====================
+// ==================== REPOSITORIES (SELF-CONTAINED) ====================
 
 class YouTubeMusicClient {
     suspend fun searchSongs(query: String): List<Song> = withContext(Dispatchers.IO) {
