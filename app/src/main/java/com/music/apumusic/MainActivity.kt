@@ -68,13 +68,7 @@ enum class MixVibe(val title: String, val subtitle: String) {
     GENRE_DNA("Genre Fusion", "Algorithmic harmony across your top genres")
 }
 
-data class SmartMix(
-    val vibe: MixVibe,
-    val seedArtist: String,
-    val generatedTracks: List<Song>
-)
-
-// ==================== ORIGINAL STREAMING & LYRICS CLIENTS ====================
+// ==================== STREAMING & LYRICS RESOLVERS ====================
 
 class InnerTubeStreamResolver {
     private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -260,7 +254,7 @@ class LrcLyricsParser {
     }
 }
 
-// ==================== MAIN ACTIVITY & EXOPLAYER PIPELINE ====================
+// ==================== MAIN ACTIVITY WITH EXOPLAYER ====================
 
 class MainActivity : ComponentActivity() {
 
@@ -287,7 +281,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Initialize real ExoPlayer with Music attributes
         exoPlayer = ExoPlayer.Builder(this)
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -441,7 +434,6 @@ class MainActivity : ComponentActivity() {
             isPlaying = true
         }
 
-        // Fetch LRCLIB lyrics in background
         CoroutineScope(Dispatchers.IO).launch {
             val lyrics = lyricsParser.fetch(song.title, song.artist)
             currentLyrics = lyrics
