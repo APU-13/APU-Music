@@ -1,10 +1,12 @@
 package com.music.apumusic
 
 import android.Manifest
+import android.content.ContentUris
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.MediaStore
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,14 +35,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.exoplayer.ExoPlayer
 import coil.compose.AsyncImage
-import com.music.apumusic.data.MediaStoreRepository
 import com.music.apumusic.data.Song
 import com.music.apumusic.ui.screens.SettingsScreen
 import com.music.apumusic.ui.theme.APUMusicTheme
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -70,21 +74,23 @@ data class SmartMix(
     val generatedTracks: List<Song>
 )
 
-// ==================== REPOSITORIES (SELF-CONTAINED) ====================
+// ==================== ORIGINAL STREAMING & LYRICS CLIENTS ====================
 
-class YouTubeMusicClient {
-    suspend fun searchSongs(query: String): List<Song> = withContext(Dispatchers.IO) {
-        val resultSongs = mutableListOf<Song>()
+class InnerTubeStreamResolver {
+    private val userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    suspend fun search(query: String): List<Song> = withContext(Dispatchers.IO) {
+        val results = mutableListOf<Song>()
         try {
-            val url = URL("https://music.youtube.com/youtubei/v1/search?prettyPrint=false")
-            val conn = url.openConnection() as HttpURLConnection
+            val endpoint = URL("https://music.youtube.com/youtubei/v1/search?prettyPrint=false")
+            val conn = endpoint.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            conn.setRequestProperty("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+            conn.setRequestProperty("User-Agent", userAgent)
             conn.setRequestProperty("Referer", "https://music.youtube.com/")
             conn.doOutput = true
 
-            val jsonPayload = JSONObject().apply {
+            val payload = JSONObject().apply {
                 put("context", JSONObject().apply {
                     put("client", JSONObject().apply {
                         put("clientName", "WEB_REMIX")
@@ -97,17 +103,15 @@ class YouTubeMusicClient {
                 put("params", "Eg-KAQwIARAAGAAgACgAMABqChAEEAMQCRAFEAo%3D")
             }
 
-            conn.outputStream.use { os ->
-                os.write(jsonPayload.toString().toByteArray())
-            }
+            conn.outputStream.use { it.write(payload.toString().toByteArray()) }
 
             if (conn.responseCode == 200) {
                 val reader = BufferedReader(InputStreamReader(conn.inputStream))
-                val responseText = reader.readText()
+                val jsonStr = reader.readText()
                 reader.close()
 
-                val root = JSONObject(responseText)
-                val contents = root.optJSONObject("contents")
+                val root = JSONObject(jsonStr)
+                val sections = root.optJSONObject("contents")
                     ?.optJSONObject("tabbedSearchResultsRenderer")
                     ?.optJSONArray("tabs")
                     ?.optJSONObject(0)
@@ -116,47 +120,43 @@ class YouTubeMusicClient {
                     ?.optJSONObject("sectionListRenderer")
                     ?.optJSONArray("contents")
 
-                if (contents != null) {
-                    for (i in 0 until contents.length()) {
-                        val section = contents.optJSONObject(i)?.optJSONObject("musicShelfRenderer")
-                        val items = section?.optJSONArray("contents") ?: continue
-                        for (j in 0 until items.length()) {
-                            val item = items.optJSONObject(j)?.optJSONObject("musicResponsiveListItemRenderer") ?: continue
-                            val videoId = item.optJSONArray("flexColumns")
-                                ?.optJSONObject(0)
+                if (sections != null) {
+                    for (i in 0 until sections.length()) {
+                        val shelf = sections.optJSONObject(i)?.optJSONObject("musicShelfRenderer")
+                        val contents = shelf?.optJSONArray("contents") ?: continue
+                        for (j in 0 until contents.length()) {
+                            val item = contents.optJSONObject(j)?.optJSONObject("musicResponsiveListItemRenderer") ?: continue
+                            val flexCols = item.optJSONArray("flexColumns") ?: continue
+
+                            val col0 = flexCols.optJSONObject(0)
                                 ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
                                 ?.optJSONObject("text")
                                 ?.optJSONArray("runs")
-                                ?.optJSONObject(0)
+
+                            val title = col0?.optJSONObject(0)?.optString("text") ?: "YouTube Track"
+                            val videoId = col0?.optJSONObject(0)
                                 ?.optJSONObject("navigationEndpoint")
                                 ?.optJSONObject("watchEndpoint")
                                 ?.optString("videoId") ?: continue
 
-                            val title = item.optJSONArray("flexColumns")
-                                ?.optJSONObject(0)
+                            val col1 = flexCols.optJSONObject(1)
                                 ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
                                 ?.optJSONObject("text")
                                 ?.optJSONArray("runs")
-                                ?.optJSONObject(0)
-                                ?.optString("text") ?: "YouTube Track"
 
-                            val artistRuns = item.optJSONArray("flexColumns")
-                                ?.optJSONObject(1)
-                                ?.optJSONObject("musicResponsiveListItemFlexColumnRenderer")
-                                ?.optJSONObject("text")
-                                ?.optJSONArray("runs")
-                            val artist = artistRuns?.optJSONObject(0)?.optString("text") ?: "YouTube Music"
-                            val thumbnail = "https://i.ytimg.com/vi/$videoId/hqdefault.jpg"
+                            val artist = col1?.optJSONObject(0)?.optString("text") ?: "YouTube Music"
+                            val album = if (col1 != null && col1.length() > 2) col1.optJSONObject(2)?.optString("text") ?: "YouTube Music" else "YouTube Music"
+                            val thumbnailUri = Uri.parse("https://i.ytimg.com/vi/$videoId/hqdefault.jpg")
 
-                            resultSongs.add(
+                            results.add(
                                 Song(
                                     id = videoId.hashCode().toLong(),
                                     title = title,
                                     artist = artist,
-                                    album = "YouTube Music Stream",
+                                    album = album,
                                     durationMs = 210000L,
-                                    contentUri = Uri.parse("https://www.youtube.com/watch?v=$videoId"),
-                                    albumArtUri = Uri.parse(thumbnail)
+                                    contentUri = Uri.parse("ytstream://$videoId"),
+                                    albumArtUri = thumbnailUri
                                 )
                             )
                         }
@@ -166,14 +166,62 @@ class YouTubeMusicClient {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        resultSongs
+        results
+    }
+
+    suspend fun resolveStreamUrl(videoId: String): String? = withContext(Dispatchers.IO) {
+        try {
+            val endpoint = URL("https://music.youtube.com/youtubei/v1/player")
+            val conn = endpoint.openConnection() as HttpURLConnection
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            conn.setRequestProperty("User-Agent", userAgent)
+            conn.doOutput = true
+
+            val payload = JSONObject().apply {
+                put("context", JSONObject().apply {
+                    put("client", JSONObject().apply {
+                        put("clientName", "ANDROID")
+                        put("clientVersion", "19.09.37")
+                        put("androidSdkVersion", 34)
+                        put("hl", "en")
+                        put("gl", "US")
+                    })
+                })
+                put("videoId", videoId)
+            }
+
+            conn.outputStream.use { it.write(payload.toString().toByteArray()) }
+
+            if (conn.responseCode == 200) {
+                val reader = BufferedReader(InputStreamReader(conn.inputStream))
+                val jsonStr = reader.readText()
+                reader.close()
+
+                val root = JSONObject(jsonStr)
+                val formats = root.optJSONObject("streamingData")?.optJSONArray("adaptiveFormats")
+                if (formats != null) {
+                    for (i in 0 until formats.length()) {
+                        val fmt = formats.optJSONObject(i) ?: continue
+                        val mimeType = fmt.optString("mimeType", "")
+                        if (mimeType.contains("audio/webm") || mimeType.contains("audio/mp4")) {
+                            val directUrl = fmt.optString("url", "")
+                            if (directUrl.isNotBlank()) return@withContext directUrl
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        null
     }
 }
 
-class LyricsClient {
+class LrcLyricsParser {
     private val timePattern = Pattern.compile("^\\[(\\d{2}):(\\d{2})\\.(\\d{2,3})\\](.*)")
 
-    suspend fun fetchLyrics(track: String, artist: String): List<LrcLine> = withContext(Dispatchers.IO) {
+    suspend fun fetch(track: String, artist: String): List<LrcLine> = withContext(Dispatchers.IO) {
         val lines = mutableListOf<LrcLine>()
         try {
             val encodedTrack = URLEncoder.encode(track, "UTF-8")
@@ -212,38 +260,23 @@ class LyricsClient {
     }
 }
 
-class SmartMixGenerator {
-    fun generateMix(allSongs: List<Song>, vibe: MixVibe): SmartMix {
-        if (allSongs.isEmpty()) {
-            return SmartMix(vibe, "APU Selection", emptyList())
-        }
-        val artist = allSongs.groupBy { it.artist }.maxByOrNull { it.value.size }?.key ?: "APU Selection"
-        val selected = when (vibe) {
-            MixVibe.CHILL_GLASS -> allSongs.filter { it.durationMs > 180000 }.shuffled().take(20)
-            MixVibe.ENERGY_BURST -> allSongs.filter { it.durationMs in 120000..240000 }.shuffled().take(20)
-            MixVibe.DEEP_CUTS -> allSongs.filter { it.artist.contains(artist, ignoreCase = true) }.takeLast(15).ifEmpty { allSongs.shuffled().take(15) }
-            MixVibe.NOSTALGIA_REPLAY -> allSongs.shuffled().take(25)
-            MixVibe.GENRE_DNA -> allSongs.shuffled().take(25)
-        }
-        return SmartMix(vibe, artist, selected)
-    }
-}
-
-// ==================== MAIN ACTIVITY ====================
+// ==================== MAIN ACTIVITY & EXOPLAYER PIPELINE ====================
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var repo: MediaStoreRepository
-    private val ytClient = YouTubeMusicClient()
-    private val lyricsClient = LyricsClient()
-    private val smartMixGen = SmartMixGenerator()
+    private lateinit var exoPlayer: ExoPlayer
+    private val streamResolver = InnerTubeStreamResolver()
+    private val lyricsParser = LrcLyricsParser()
 
     private var localSongs by mutableStateOf<List<Song>>(emptyList())
     private var searchResults by mutableStateOf<List<Song>>(emptyList())
     private var currentSong by mutableStateOf<Song?>(null)
     private var isPlaying by mutableStateOf(false)
     private var currentPositionMs by mutableStateOf(0L)
+    private var durationMs by mutableStateOf(0L)
     private var currentLyrics by mutableStateOf<List<LrcLine>>(emptyList())
+
+    private var positionJob: Job? = null
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -253,7 +286,34 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        repo = MediaStoreRepository(this)
+
+        // Initialize real ExoPlayer with Music attributes
+        exoPlayer = ExoPlayer.Builder(this)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .setUsage(C.USAGE_MEDIA)
+                    .build(),
+                true
+            )
+            .setHandleAudioBecomingNoisy(true)
+            .build()
+
+        exoPlayer.addListener(object : Player.Listener {
+            override fun onIsPlayingChanged(playing: Boolean) {
+                isPlaying = playing
+                if (playing) startPositionTracking() else stopPositionTracking()
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) {
+                    durationMs = exoPlayer.duration.coerceAtLeast(0L)
+                } else if (playbackState == Player.STATE_ENDED) {
+                    isPlaying = false
+                }
+            }
+        })
+
         checkStoragePermissions()
 
         setContent {
@@ -270,7 +330,7 @@ class MainActivity : ComponentActivity() {
                                     MiniPlayer(
                                         song = song,
                                         isPlaying = isPlaying,
-                                        onPlayPause = { isPlaying = !isPlaying },
+                                        onPlayPause = { togglePlayPause() },
                                         onClick = { showFullNowPlaying = true }
                                     )
                                 }
@@ -316,19 +376,18 @@ class MainActivity : ComponentActivity() {
                                     searchResults = searchResults,
                                     onSearch = { query ->
                                         scope.launch {
-                                            searchResults = ytClient.searchSongs(query)
+                                            searchResults = streamResolver.search(query)
                                         }
                                     },
-                                    onSongSelected = { song -> playSong(song) }
+                                    onSongSelected = { song -> startPlayback(song) }
                                 )
                                 1 -> LibraryScreen(
                                     songs = localSongs,
-                                    onSongSelected = { song -> playSong(song) }
+                                    onSongSelected = { song -> startPlayback(song) }
                                 )
                                 2 -> SmartMixesScreen(
                                     allSongs = localSongs,
-                                    smartMixGen = smartMixGen,
-                                    onSongSelected = { song -> playSong(song) }
+                                    onSongSelected = { song -> startPlayback(song) }
                                 )
                                 3 -> SettingsScreen()
                             }
@@ -344,12 +403,15 @@ class MainActivity : ComponentActivity() {
                             song = currentSong,
                             isPlaying = isPlaying,
                             currentPositionMs = currentPositionMs,
-                            durationMs = currentSong?.durationMs ?: 0L,
+                            durationMs = if (durationMs > 0) durationMs else (currentSong?.durationMs ?: 0L),
                             syncedLyrics = currentLyrics,
-                            onPlayPause = { isPlaying = !isPlaying },
+                            onPlayPause = { togglePlayPause() },
                             onNext = {},
                             onPrevious = {},
-                            onSeekTo = { pos -> currentPositionMs = pos },
+                            onSeekTo = { pos ->
+                                exoPlayer.seekTo(pos)
+                                currentPositionMs = pos
+                            },
                             onClose = { showFullNowPlaying = false }
                         )
                     }
@@ -358,15 +420,54 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun playSong(song: Song) {
+    private fun startPlayback(song: Song) {
         currentSong = song
-        isPlaying = true
         currentPositionMs = 0L
 
-        kotlinx.coroutines.CoroutineScope(Dispatchers.IO).launch {
-            val lyrics = lyricsClient.fetchLyrics(song.title, song.artist)
+        CoroutineScope(Dispatchers.Main).launch {
+            val uriStr = song.contentUri.toString()
+            val playableUri: Uri = if (uriStr.startsWith("ytstream://")) {
+                val videoId = uriStr.removePrefix("ytstream://")
+                val streamUrl = streamResolver.resolveStreamUrl(videoId)
+                if (streamUrl != null) Uri.parse(streamUrl) else song.contentUri
+            } else {
+                song.contentUri
+            }
+
+            val item = MediaItem.fromUri(playableUri)
+            exoPlayer.setMediaItem(item)
+            exoPlayer.prepare()
+            exoPlayer.play()
+            isPlaying = true
+        }
+
+        // Fetch LRCLIB lyrics in background
+        CoroutineScope(Dispatchers.IO).launch {
+            val lyrics = lyricsParser.fetch(song.title, song.artist)
             currentLyrics = lyrics
         }
+    }
+
+    private fun togglePlayPause() {
+        if (exoPlayer.isPlaying) {
+            exoPlayer.pause()
+        } else {
+            exoPlayer.play()
+        }
+    }
+
+    private fun startPositionTracking() {
+        positionJob?.cancel()
+        positionJob = CoroutineScope(Dispatchers.Main).launch {
+            while (isActive) {
+                currentPositionMs = exoPlayer.currentPosition
+                delay(300)
+            }
+        }
+    }
+
+    private fun stopPositionTracking() {
+        positionJob?.cancel()
     }
 
     private fun checkStoragePermissions() {
@@ -383,7 +484,59 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadLocalMusic() {
-        localSongs = repo.loadLocalSongs()
+        val songs = mutableListOf<Song>()
+        val collection = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+        val projection = arrayOf(
+            MediaStore.Audio.Media._ID,
+            MediaStore.Audio.Media.TITLE,
+            MediaStore.Audio.Media.ARTIST,
+            MediaStore.Audio.Media.ALBUM,
+            MediaStore.Audio.Media.DURATION,
+            MediaStore.Audio.Media.ALBUM_ID
+        )
+        val selection = "${MediaStore.Audio.Media.IS_MUSIC} != 0 AND ${MediaStore.Audio.Media.DURATION} >= 10000"
+        val sortOrder = "${MediaStore.Audio.Media.TITLE} ASC"
+
+        contentResolver.query(collection, projection, selection, null, sortOrder)?.use { cursor ->
+            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
+            val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
+            val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+            val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
+            val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
+            val albumIdCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM_ID)
+            val artworkBase = Uri.parse("content://media/external/audio/albumart")
+
+            while (cursor.moveToNext()) {
+                val id = cursor.getLong(idCol)
+                val title = cursor.getString(titleCol) ?: "Unknown Title"
+                val artist = cursor.getString(artistCol) ?: "Unknown Artist"
+                val album = cursor.getString(albumCol) ?: "Unknown Album"
+                val duration = cursor.getLong(durationCol)
+                val albumId = cursor.getLong(albumIdCol)
+
+                val contentUri = ContentUris.withAppendedId(collection, id)
+                val albumArtUri = ContentUris.withAppendedId(artworkBase, albumId)
+
+                songs.add(
+                    Song(
+                        id = id,
+                        title = title,
+                        artist = artist,
+                        album = album,
+                        durationMs = duration,
+                        contentUri = contentUri,
+                        albumArtUri = albumArtUri
+                    )
+                )
+            }
+        }
+        localSongs = songs
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopPositionTracking()
+        exoPlayer.release()
     }
 }
 
@@ -478,7 +631,6 @@ fun ExploreScreen(
 @Composable
 fun SmartMixesScreen(
     allSongs: List<Song>,
-    smartMixGen: SmartMixGenerator,
     onSongSelected: (Song) -> Unit
 ) {
     Column(
@@ -508,8 +660,8 @@ fun SmartMixesScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            val mix = smartMixGen.generateMix(allSongs, vibe)
-                            mix.generatedTracks.firstOrNull()?.let { onSongSelected(it) }
+                            val selected = allSongs.shuffled().take(20)
+                            selected.firstOrNull()?.let { onSongSelected(it) }
                         }
                 ) {
                     Row(
