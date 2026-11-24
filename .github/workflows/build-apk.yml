@@ -100,6 +100,13 @@ jobs:
     - name: Grant Execute Permission for Gradlew
       run: chmod +x gradlew
 
+    - name: Clean Duplicate Resources
+      run: |
+        find app/src/main/res/ -name "ic_launcher*.png" -delete
+        find app/src/main/res/ -name "ic_launcher_round.png" -delete
+        find app/src/main/res/drawable/ -name "ic_launcher_foreground.png" -delete
+        find app/src/main/res/drawable/ -name "ic_launcher_foreground.webp" -delete
+
     - name: Build Production Release APK
       run: ./gradlew assembleProdRelease --stacktrace
 
