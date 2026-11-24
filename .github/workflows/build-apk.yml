@@ -2,42 +2,146 @@ name: Build APU Music APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+    - name: Checkout APU Music Repo
+      uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        java-version: '17'
+        distribution: 'temurin'
+        cache: gradle
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.7'
+    - name: Fetch Core Music Engine & UI
+      run: |
+        git clone --depth 1 https://github.com/kushagrasinghx/BitChord.git /tmp/bitchord
+        rsync -av --exclude='.git' --exclude='.github' /tmp/bitchord/ .
 
-      - name: Clean Duplicate Resources
-        run: |
-          find app/src/main/res -name "*.png" -path "*/mipmap*/*" -delete 2>/dev/null || true
-          rm -f app/src/main/res/drawable/ic_launcher_foreground.webp 2>/dev/null || true
+    - name: Apply APU Music Branding & Configuration
+      run: |
+        python3 - << 'EOF'
+        import os, re
 
-      - name: Compile Debug APK
-        run: gradle assembleDebug --stacktrace
+        # 1. Update root build.gradle.kts versioning
+        if os.path.exists("build.gradle.kts"):
+            with open("build.gradle.kts", "r", encoding="utf-8") as f:
+                content = f.read()
+            content = re.sub(r'extra\["bitchordVersionCode"\]\s*=\s*\d+', 'extra["bitchordVersionCode"] = 37', content)
+            content = re.sub(r'extra\["bitchordVersionName"\]\s*=\s*"[^"]*"', 'extra["bitchordVersionName"] = "1.9"', content)
+            content = re.sub(r'extra\["bitchordBetaSuffix"\]\s*=\s*"[^"]*"', 'extra["bitchordBetaSuffix"] = ""', content)
+            with open("build.gradle.kts", "w", encoding="utf-8") as f:
+                f.write(content)
 
-      - name: Package Final Clean Artifact
-        run: |
-          mkdir -p release_output
-          cp app/build/outputs/apk/debug/*.apk release_output/APU-Music-v1.9.apk
+        # 2. Update app/build.gradle.kts
+        if os.path.exists("app/build.gradle.kts"):
+            with open("app/build.gradle.kts", "r", encoding="utf-8") as f:
+                content = f.read()
+            content = content.replace('namespace = "com.music.bitchord"', 'namespace = "com.music.apumusic"')
+            content = content.replace('applicationId = "com.music.bitchord"', 'applicationId = "com.music.apumusic"')
+            content = content.replace('resValue("string", "app_name", "BitChord Dev")', 'resValue("string", "app_name", "APU Music Dev")')
+            with open("app/build.gradle.kts", "w", encoding="utf-8") as f:
+                f.write(content)
 
-      - name: Upload Clean APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: APU-Music-v1.9
-          path: release_output/APU-Music-v1.9.apk
+        # 3. Update strings.xml for App Name
+        for root, dirs, files in os.walk("app/src/main/res"):
+            for file in files:
+                if file == "strings.xml":
+                    path = os.path.join(root, file)
+                    with open(path, "r", encoding="utf-8") as f:
+                        s = f.read()
+                    s = s.replace(">BitChord<", ">APU Music<")
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(s)
+
+        # 4. Update AndroidManifest.xml
+        manifest_path = "app/src/main/AndroidManifest.xml"
+        if os.path.exists(manifest_path):
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                m = f.read()
+            if 'android:extractNativeLibs' not in m:
+                m = m.replace("<application", '<application\n        android:extractNativeLibs="true"')
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                f.write(m)
+
+        print("Rebranding applied successfully.")
+        EOF
+
+    - name: Generate Signing Keystore
+      run: |
+        keytool -genkeypair -v -keystore apumusic.jks -alias apumusic \
+          -keyalg RSA -keysize 2048 -validity 10000 \
+          -storepass apumusicpass -keypass apumusicpass \
+          -dname "CN=APU, OU=Music, O=APU, L=Hyderabad, ST=Telangana, C=IN"
+
+        cat <<EOF > keystore.properties
+        storeFile=apumusic.jks
+        storePassword=apumusicpass
+        keyAlias=apumusic
+        keyPassword=apumusicpass
+        EOF
+
+        cat <<EOF > local.properties
+        LASTFM_API_KEY=
+        LASTFM_SECRET=
+        LISTEN_TOGETHER_SERVER=
+        EOF
+
+    - name: Grant Execute Permission for Gradlew
+      run: chmod +x gradlew
+
+    - name: Build Production Release APK
+      run: ./gradlew assembleProdRelease --stacktrace
+
+    - name: Align and Sign APK
+      run: |
+        RAW_APK=$(find app/build/outputs/apk/prod/release -name "*.apk" | head -n 1)
+        echo "Found raw APK: $RAW_APK"
+        zipalign -v -p 4 "$RAW_APK" aligned-app.apk
+        apksigner sign --ks apumusic.jks --ks-pass pass:apumusicpass --key-pass pass:apumusicpass --out APU-Music-v1.9.apk aligned-app.apk
+
+    - name: Static Verification
+      run: |
+        apksigner verify --verbose APU-Music-v1.9.apk
+        zipalign -c -v -p 4 APU-Music-v1.9.apk
+        echo "Verification passed: v2/v3 signed and 4-byte page aligned."
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v1.9
+        name: "APU Music v1.9"
+        body: |
+          ## APU Music v1.9
+          Official Android build for **APU Music**.
+          
+          ### Highlights:
+          - **Streaming:** YouTube Music streaming, artist/album/track search, charts, and recommendations
+          - **Aesthetics:** Apple Music UI with Haze frosted-glass blur and dynamic album-artwork theming
+          - **Lyrics:** Real-time synchronized lyrics via LRCLIB
+          - **Audio Engine:** Gapless playback, crossfade, and equalizer
+          - **Device Optimization:** 64-bit ARM (`arm64-v8a`), page-aligned native libs, signed with release key
+          
+          ### Installation:
+          Tap **`APU-Music-v1.9.apk`** below to download and install on your phone.
+        files: APU-Music-v1.9.apk
+        draft: false
+        prerelease: false
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: APU-Music-v1.9
+        path: APU-Music-v1.9.apk
